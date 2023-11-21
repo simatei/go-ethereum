@@ -1,18 +1,18 @@
-// Copyright 2020 The go-ethereum Authors
-// This file is part of the go-ethereum library.
+// Copyright 2021 The go-ethereum Authors
+// This file is part of go-ethereum.
 //
-// The go-ethereum library is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Lesser General Public License as published by
+// go-ethereum is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The go-ethereum library is distributed in the hope that it will be useful,
+// go-ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Lesser General Public License for more details.
+// GNU General Public License for more details.
 //
-// You should have received a copy of the GNU Lesser General Public License
-// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
+// You should have received a copy of the GNU General Public License
+// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
 
 package ethtest
 
@@ -35,6 +35,7 @@ var (
 )
 
 func TestEthSuite(t *testing.T) {
+	t.Parallel()
 	geth, err := runGeth()
 	if err != nil {
 		t.Fatalf("could not run geth: %v", err)
@@ -45,7 +46,7 @@ func TestEthSuite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not create new test suite: %v", err)
 	}
-	for _, test := range suite.Eth66Tests() {
+	for _, test := range suite.EthTests() {
 		t.Run(test.Name, func(t *testing.T) {
 			result := utesting.RunTAP([]utesting.Test{{Name: test.Name, Fn: test.Fn}}, os.Stdout)
 			if result[0].Failed {
@@ -56,6 +57,7 @@ func TestEthSuite(t *testing.T) {
 }
 
 func TestSnapSuite(t *testing.T) {
+	t.Parallel()
 	geth, err := runGeth()
 	if err != nil {
 		t.Fatalf("could not run geth: %v", err)
@@ -109,19 +111,18 @@ func setupGeth(stack *node.Node) error {
 	}
 
 	backend, err := eth.New(stack, &ethconfig.Config{
-		Genesis:                 &chain.genesis,
-		NetworkId:               chain.genesis.Config.ChainID.Uint64(), // 19763
-		DatabaseCache:           10,
-		TrieCleanCache:          10,
-		TrieCleanCacheJournal:   "",
-		TrieCleanCacheRejournal: 60 * time.Minute,
-		TrieDirtyCache:          16,
-		TrieTimeout:             60 * time.Minute,
-		SnapshotCache:           10,
+		Genesis:        &chain.genesis,
+		NetworkId:      chain.genesis.Config.ChainID.Uint64(), // 19763
+		DatabaseCache:  10,
+		TrieCleanCache: 10,
+		TrieDirtyCache: 16,
+		TrieTimeout:    60 * time.Minute,
+		SnapshotCache:  10,
 	})
 	if err != nil {
 		return err
 	}
+	backend.SetSynced()
 
 	_, err = backend.BlockChain().InsertChain(chain.blocks[1:])
 	return err

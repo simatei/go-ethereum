@@ -24,13 +24,17 @@ import (
 	"reflect"
 
 	"github.com/ethereum/go-ethereum/rlp/internal/rlpstruct"
+	"github.com/holiman/uint256"
 )
 
 var (
 	// Common encoded values.
 	// These are useful when implementing EncodeRLP.
+
+	// EmptyString is the encoding of an empty string.
 	EmptyString = []byte{0x80}
-	EmptyList   = []byte{0xC0}
+	// EmptyList is the encoding of an empty list.
+	EmptyList = []byte{0xC0}
 )
 
 var ErrNegativeBigInt = errors.New("rlp: cannot encode negative big.Int")
@@ -56,20 +60,16 @@ type Encoder interface {
 // Please see package-level documentation of encoding rules.
 func Encode(w io.Writer, val interface{}) error {
 	// Optimization: reuse *encBuffer when called by EncodeRLP.
-	if buf, ok := w.(*encBuffer); ok {
+	if buf := encBufferFromWriter(w); buf != nil {
 		return buf.encode(val)
-	}
-	if ebuf, ok := w.(EncoderBuffer); ok {
-		return ebuf.buf.encode(val)
 	}
 
 	buf := getEncBuffer()
 	defer encBufferPool.Put(buf)
-
 	if err := buf.encode(val); err != nil {
 		return err
 	}
-	return buf.toWriter(w)
+	return buf.writeTo(w)
 }
 
 // EncodeToBytes returns the RLP encoding of val.
@@ -81,7 +81,7 @@ func EncodeToBytes(val interface{}) ([]byte, error) {
 	if err := buf.encode(val); err != nil {
 		return nil, err
 	}
-	return buf.toBytes(), nil
+	return buf.makeBytes(), nil
 }
 
 // EncodeToReader returns a reader from which the RLP encoding of val
@@ -145,6 +145,10 @@ func makeWriter(typ reflect.Type, ts rlpstruct.Tags) (writer, error) {
 		return writeBigIntPtr, nil
 	case typ.AssignableTo(bigInt):
 		return writeBigIntNoPtr, nil
+	case typ == reflect.PtrTo(u256Int):
+		return writeU256IntPtr, nil
+	case typ == u256Int:
+		return writeU256IntNoPtr, nil
 	case kind == reflect.Ptr:
 		return makePtrWriter(typ, ts)
 	case reflect.PtrTo(typ).Implements(encoderInterface):
@@ -204,6 +208,22 @@ func writeBigIntNoPtr(val reflect.Value, w *encBuffer) error {
 		return ErrNegativeBigInt
 	}
 	w.writeBigInt(&i)
+	return nil
+}
+
+func writeU256IntPtr(val reflect.Value, w *encBuffer) error {
+	ptr := val.Interface().(*uint256.Int)
+	if ptr == nil {
+		w.str = append(w.str, 0x80)
+		return nil
+	}
+	w.writeUint256(ptr)
+	return nil
+}
+
+func writeU256IntNoPtr(val reflect.Value, w *encBuffer) error {
+	i := val.Interface().(uint256.Int)
+	w.writeUint256(&i)
 	return nil
 }
 
@@ -399,7 +419,7 @@ func makeEncoderWriter(typ reflect.Type) writer {
 			// package json simply doesn't call MarshalJSON for this case, but encodes the
 			// value as if it didn't implement the interface. We don't want to handle it that
 			// way.
-			return fmt.Errorf("rlp: unadressable value of type %v, EncodeRLP is pointer method", val.Type())
+			return fmt.Errorf("rlp: unaddressable value of type %v, EncodeRLP is pointer method", val.Type())
 		}
 		return val.Addr().Interface().(Encoder).EncodeRLP(w)
 	}

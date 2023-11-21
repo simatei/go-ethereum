@@ -57,6 +57,8 @@ const (
 	txChanSize = 4096
 	// chainHeadChanSize is the size of channel listening to ChainHeadEvent.
 	chainHeadChanSize = 10
+
+	messageSizeLimit = 15 * 1024 * 1024
 )
 
 // backend encompasses the bare-minimum functionality needed for ethstats reporting
@@ -74,10 +76,16 @@ type backend interface {
 // reporting to ethstats
 type fullNodeBackend interface {
 	backend
-	Miner() *miner.Miner
 	BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error)
-	CurrentBlock() *types.Block
+	CurrentBlock() *types.Header
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
+}
+
+// miningNodeBackend encompasses the functionality necessary for a mining node
+// reporting to ethstats
+type miningNodeBackend interface {
+	fullNodeBackend
+	Miner() *miner.Miner
 }
 
 // Service implements an Ethereum netstats reporting daemon that pushes local
@@ -102,13 +110,17 @@ type Service struct {
 // websocket.
 //
 // From Gorilla websocket docs:
-//   Connections support one concurrent reader and one concurrent writer.
-//   Applications are responsible for ensuring that no more than one goroutine calls the write methods
-//     - NextWriter, SetWriteDeadline, WriteMessage, WriteJSON, EnableWriteCompression, SetCompressionLevel
-//   concurrently and that no more than one goroutine calls the read methods
-//     - NextReader, SetReadDeadline, ReadMessage, ReadJSON, SetPongHandler, SetPingHandler
-//   concurrently.
-//   The Close and WriteControl methods can be called concurrently with all other methods.
+//
+// Connections support one concurrent reader and one concurrent writer. Applications are
+// responsible for ensuring that
+//   - no more than one goroutine calls the write methods
+//     NextWriter, SetWriteDeadline, WriteMessage, WriteJSON, EnableWriteCompression,
+//     SetCompressionLevel concurrently; and
+//   - that no more than one goroutine calls the
+//     read methods NextReader, SetReadDeadline, ReadMessage, ReadJSON, SetPongHandler,
+//     SetPingHandler concurrently.
+//
+// The Close and WriteControl methods can be called concurrently with all other methods.
 type connWrapper struct {
 	conn *websocket.Conn
 
@@ -117,6 +129,7 @@ type connWrapper struct {
 }
 
 func newConnectionWrapper(conn *websocket.Conn) *connWrapper {
+	conn.SetReadLimit(messageSizeLimit)
 	return &connWrapper{conn: conn}
 }
 
@@ -366,7 +379,7 @@ func (s *Service) readLoop(conn *connWrapper) {
 		// If the network packet is a system ping, respond to it directly
 		var ping string
 		if err := json.Unmarshal(blob, &ping); err == nil && strings.HasPrefix(ping, "primus::ping::") {
-			if err := conn.WriteJSON(strings.Replace(ping, "ping", "pong", -1)); err != nil {
+			if err := conn.WriteJSON(strings.ReplaceAll(ping, "ping", "pong")); err != nil {
 				log.Warn("Failed to respond to system ping message", "err", err)
 				return
 			}
@@ -627,7 +640,8 @@ func (s *Service) assembleBlockStats(block *types.Block) *blockStats {
 	fullBackend, ok := s.backend.(fullNodeBackend)
 	if ok {
 		if block == nil {
-			block = fullBackend.CurrentBlock()
+			head := fullBackend.CurrentBlock()
+			block, _ = fullBackend.BlockByNumber(context.Background(), rpc.BlockNumber(head.Number.Uint64()))
 		}
 		header = block.Header()
 		td = fullBackend.GetTd(context.Background(), header.Hash())
@@ -772,10 +786,11 @@ func (s *Service) reportStats(conn *connWrapper) error {
 		gasprice int
 	)
 	// check if backend is a full node
-	fullBackend, ok := s.backend.(fullNodeBackend)
-	if ok {
-		mining = fullBackend.Miner().Mining()
-		hashrate = int(fullBackend.Miner().Hashrate())
+	if fullBackend, ok := s.backend.(fullNodeBackend); ok {
+		if miningBackend, ok := s.backend.(miningNodeBackend); ok {
+			mining = miningBackend.Miner().Mining()
+			hashrate = int(miningBackend.Miner().Hashrate())
+		}
 
 		sync := fullBackend.SyncProgress()
 		syncing = fullBackend.CurrentHeader().Number.Uint64() >= sync.HighestBlock

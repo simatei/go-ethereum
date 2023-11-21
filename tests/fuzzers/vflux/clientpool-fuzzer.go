@@ -214,7 +214,7 @@ func (f *fuzzer) atomicBalanceOp(balance vfs.AtomicBalanceOperator, id enode.ID)
 	}
 }
 
-func FuzzClientPool(input []byte) int {
+func fuzzClientPool(input []byte) int {
 	if len(input) > 10000 {
 		return -1
 	}
@@ -267,9 +267,7 @@ func FuzzClientPool(input []byte) int {
 				bias      = f.randomDelay()
 				requested = f.randomBool()
 			)
-			if _, err := pool.SetCapacity(f.peers[index].node, reqCap, bias, requested); err == vfs.ErrCantFindMaximum {
-				panic(nil)
-			}
+			pool.SetCapacity(f.peers[index].node, reqCap, bias, requested)
 			doLog("Set capacity", "id", f.peers[index].node.ID(), "reqcap", reqCap, "bias", bias, "requested", requested)
 		case 7:
 			index := f.randomByte()
